@@ -6,21 +6,24 @@ import lombok.NoArgsConstructor;
 
 import javax.persistence.*;
 
-
 @Data
 @AllArgsConstructor
 @NoArgsConstructor
-@Table(name = "state_tbl")
 @Entity
+@Table(name = "state_tbl")
 public class State {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
-    private String name;
-    private Long countryId;
-    @Column(length = 2, columnDefinition = "char")
-    private String countryCode;
-    private String stateCode;
 
+    private String name;
+
+    private Long countryId;
+
+    // Removed columnDefinition to let Hibernate handle it correctly
+    @Column(length = 2)
+    private String countryCode;
+
+    private String stateCode;
 }
