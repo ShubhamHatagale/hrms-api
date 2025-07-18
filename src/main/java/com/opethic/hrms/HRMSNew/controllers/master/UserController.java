@@ -134,204 +134,142 @@ public class UserController {
     }
 
     @RequestMapping(value = "/authenticate", method = RequestMethod.POST)
-    public Object createAuthenticateToken(@RequestBody Map<String, String> request,
-                                                     HttpServletRequest req) {
+    public ResponseEntity<String> createAuthenticateToken(@RequestBody Map<String, String> request, HttpServletRequest req) {
         JsonObject responseMessage = new JsonObject();
         String username = request.get("username");
         String password = request.get("password");
+
         try {
-            UsernamePasswordAuthenticationToken authenticationToken =
-                    new UsernamePasswordAuthenticationToken(username, password);
-            authenticationManager.authenticate(authenticationToken);
-            Users users = userService.findUserWithPassword(username, password);
+            // Authenticate using Spring Security
+            UsernamePasswordAuthenticationToken authToken = new UsernamePasswordAuthenticationToken(username, password);
+            authenticationManager.authenticate(authToken);
+
+            Users user = userService.findUserWithPassword(username, password);
+            if (user == null) {
+                throw new BadCredentialsException("Invalid credentials");
+            }
+
             Algorithm algorithm = Algorithm.HMAC256(SECRET_KEY.getBytes());
-            JWTCreator.Builder jwtBuilder = JWT.create();
-            String access_token = "";
-            jwtBuilder.withSubject(users.getUsername());
-            jwtBuilder.withExpiresAt(new Date(System.currentTimeMillis() + ACCESS_VALIDITY * 1000));
-            jwtBuilder.withIssuer(req.getRequestURI());
-            jwtBuilder.withClaim("userId", users.getId());
-            jwtBuilder.withClaim("isSuperAdmin", users.getIsSuperAdmin());
-            jwtBuilder.withClaim("userRole", users.getUserRole());
-            jwtBuilder.withClaim("userCode", users.getUsercode());
-            jwtBuilder.withClaim("fullName", users.getFullName());
+            JWTCreator.Builder jwtBuilder = JWT.create()
+                    .withSubject(user.getUsername())
+                    .withIssuer(req.getRequestURI())
+                    .withExpiresAt(new Date(System.currentTimeMillis() + ACCESS_VALIDITY * 1000))
+                    .withClaim("userId", user.getId())
+                    .withClaim("isSuperAdmin", user.getIsSuperAdmin())
+                    .withClaim("userRole", user.getUserRole())
+                    .withClaim("userCode", user.getUsercode())
+                    .withClaim("fullName", user.getFullName());
+
+            JsonObject userObject = new JsonObject();
+            userObject.addProperty("userId", user.getId());
+            userObject.addProperty("isSuperAdmin", user.getIsSuperAdmin());
+            userObject.addProperty("userRole", user.getUserRole());
+            userObject.addProperty("userCode", user.getUsercode());
+            userObject.addProperty("fullName", user.getFullName());
+            responseMessage.add("userObject", userObject);
+
+            // Role-specific data
             Company outlet = null;
             Branch branch = null;
-            if (users.getUserRole() != null && !users.getUserRole().equalsIgnoreCase("SADMIN")){
-                if(users.getUserRole().equalsIgnoreCase("CADMIN"))
-                    outlet = companyRepository.findByIdAndStatus(users.getCompany().getId(),true);
-                else if (users.getUserRole().equalsIgnoreCase("BADMIN") || users.getUserRole().equalsIgnoreCase("USER")){
-                    outlet = companyRepository.findByIdAndStatus(users.getCompany().getId(),true);
-                    branch = branchRepository.findByIdAndStatus(users.getBranch().getId(),true);
+
+            if (!"SADMIN".equalsIgnoreCase(user.getUserRole())) {
+                outlet = companyRepository.findByIdAndStatus(user.getCompany().getId(), true);
+                if ("BADMIN".equalsIgnoreCase(user.getUserRole()) || "USER".equalsIgnoreCase(user.getUserRole())) {
+                    branch = branchRepository.findByIdAndStatus(user.getBranch().getId(), true);
                 }
             }
-            if (users.getUserRole() != null && users.getUserRole().equalsIgnoreCase("CADMIN")) {
+
+            if ("CADMIN".equalsIgnoreCase(user.getUserRole()) && outlet != null) {
                 jwtBuilder.withClaim("outletId", outlet.getId());
                 jwtBuilder.withClaim("outletName", outlet.getCompanyName());
                 jwtBuilder.withClaim("state", outlet.getRegStateId());
-                List<Branch> brancheList = branchRepository.findByCompanyIdAndStatus(users.getCompany().getId(), true);
+
+                List<Branch> branchList = branchRepository.findByCompanyIdAndStatus(outlet.getId(), true);
                 JsonArray branchArray = new JsonArray();
-                if(brancheList != null){
-                    for(Branch mBranch : brancheList){
-                        JsonObject jsonObject = new JsonObject();
-                        jsonObject.addProperty("id", mBranch.getId());
-                        jsonObject.addProperty("branchName", mBranch.getBranchName());
-                        branchArray.add(jsonObject);
-                    }
-                    responseMessage.add("branchList",branchArray);
+                for (Branch b : branchList) {
+                    JsonObject bJson = new JsonObject();
+                    bJson.addProperty("id", b.getId());
+                    bJson.addProperty("branchName", b.getBranchName());
+                    branchArray.add(bJson);
                 }
-//                jwtBuilder.withClaim("isMultiBranch", outlet.getIsMultiBranch() != null ? outlet.getIsMultiBranch() : false);
-            } else if (users.getUserRole() != null && users.getUserRole().equalsIgnoreCase("BADMIN") || users.getUserRole().equalsIgnoreCase("USER")) {
-                jwtBuilder.withClaim("branchId", branch != null ? branch.getId().toString() : "");
-                jwtBuilder.withClaim("branchName", branch != null ? branch.getBranchName() : "");
+                responseMessage.add("branchList", branchArray);
+            } else if (("BADMIN".equalsIgnoreCase(user.getUserRole()) || "USER".equalsIgnoreCase(user.getUserRole())) && outlet != null && branch != null) {
+                jwtBuilder.withClaim("branchId", branch.getId());
+                jwtBuilder.withClaim("branchName", branch.getBranchName());
                 jwtBuilder.withClaim("outletId", outlet.getId());
                 jwtBuilder.withClaim("outletName", outlet.getCompanyName());
                 jwtBuilder.withClaim("state", outlet.getRegStateId());
-            } else {
+            } else if ("SADMIN".equalsIgnoreCase(user.getUserRole())) {
                 List<Company> companyList = companyRepository.findAllByStatus(true);
                 JsonArray companyArray = new JsonArray();
-                if(companyList != null){
-                    for(Company mCompany : companyList){
-                        JsonObject jsonObject = new JsonObject();
-                        jsonObject.addProperty("id", mCompany.getId());
-                        jsonObject.addProperty("companyName", mCompany.getCompanyName());
-                        companyArray.add(jsonObject);
-                    }
-                    responseMessage.add("companyList",companyArray);
+                for (Company c : companyList) {
+                    JsonObject cJson = new JsonObject();
+                    cJson.addProperty("id", c.getId());
+                    cJson.addProperty("companyName", c.getCompanyName());
+                    companyArray.add(cJson);
                 }
+                responseMessage.add("companyList", companyArray);
             }
-            JsonObject userObject = new JsonObject();
-            userObject.addProperty("userId", users.getId());
-            userObject.addProperty("isSuperAdmin", users.getIsSuperAdmin());
-            userObject.addProperty("userRole", users.getUserRole());
-            userObject.addProperty("userCode", users.getUsercode());
-            userObject.addProperty("fullName", users.getFullName());
-            responseMessage.add("userObject",userObject);
 
-            jwtBuilder.withClaim("status", "OK");
-            if(!users.getUserRole().equalsIgnoreCase("SADMIN")) {
-                /* getting User Permissions */
-                JsonObject finalResult = new JsonObject();
+            // Permissions
+            if (!"SADMIN".equalsIgnoreCase(user.getUserRole())) {
+                List<SystemAccessPermissions> permissionsList = systemAccessPermissionsRepository.findByUsersIdAndStatus(user.getId(), true);
                 JsonArray userPermissions = new JsonArray();
-                JsonArray permissions = new JsonArray();
-                JsonArray masterModules = new JsonArray();
-                List<SystemAccessPermissions> list = systemAccessPermissionsRepository.findByUsersIdAndStatus(users.getId(), true);
-                /*
-                 * Print elements using the forEach
-                 */
-                for (SystemAccessPermissions mapping : list) {
-                    JsonObject mObject = new JsonObject();
-                    mObject.addProperty("id", mapping.getId());
-                    mObject.addProperty("action_mapping_id", mapping.getId());
-                    SystemMasterModules modules = systemMasterModuleRepository.findByIdAndStatus(mapping.getId(), true);
-                    if(modules != null) {
-                        mObject.addProperty("action_mapping_name", modules.getName());
-                        mObject.addProperty("action_mapping_slug", modules.getSlug());
-                        String[] actions = mapping.getUserActionsId().split(",");
-                        permissions = accessPermissions.getActions(actions);
-                        masterModules = accessPermissions.getParentMasters(modules.getParentModuleId());
-                        mObject.add("actions", permissions);
-                        JsonObject jsonObject = new JsonObject();
-                        jsonObject.addProperty("id", modules.getId());
-                        jsonObject.addProperty("name", modules.getName());
-                        jsonObject.addProperty("slug", modules.getSlug());
-                        masterModules.add(jsonObject);
-                        mObject.add("parent_modules", masterModules);
-                        userPermissions.add(mObject);
+
+                for (SystemAccessPermissions perm : permissionsList) {
+                    JsonObject permJson = new JsonObject();
+                    SystemMasterModules module = systemMasterModuleRepository.findByIdAndStatus(perm.getId(), true);
+                    if (module != null) {
+                        permJson.addProperty("id", perm.getId());
+                        permJson.addProperty("action_mapping_id", perm.getId());
+                        permJson.addProperty("action_mapping_name", module.getName());
+                        permJson.addProperty("action_mapping_slug", module.getSlug());
+
+                        String[] actions = perm.getUserActionsId().split(",");
+                        permJson.add("actions", accessPermissions.getActions(actions));
+                        permJson.add("parent_modules", accessPermissions.getParentMasters(module.getParentModuleId()));
+
+                        userPermissions.add(permJson);
                     }
                 }
-                finalResult.add("userActions", userPermissions);
-                responseMessage.add("response",finalResult);
+
+                JsonObject result = new JsonObject();
+                result.add("userActions", userPermissions);
+                responseMessage.add("response", result);
             }
 
-            /* end of User Permissions */
-            //     jwtBuilder.withClaim("permission", "" + finalResult);
-            access_token = jwtBuilder.sign(algorithm);
-            JWTCreator.Builder builder = JWT.create();
-            String refresh_token = "";
-            builder.withSubject(users.getUsername());
-            builder.withExpiresAt(new Date(System.currentTimeMillis() + TOKEN_VALIDITY * 1000));
-            builder.withIssuer(req.getRequestURI());
-            refresh_token = builder.sign(algorithm);
-            Map<String, Claim> claims = new HashMap<>();
-            DecodedJWT jwt = JWT.decode(access_token);
-            claims = jwt.getClaims();
-            System.out.println("claims " + claims.toString());
-            System.out.println("claims " + claims.toString().length());
-            System.out.println("Access token length " + access_token.length());
-            System.out.println("Refresh token length " + refresh_token.length());
-            Map<String, String> tokens = new HashMap<>();
-            tokens.put("access_token", access_token);
-            tokens.put("refresh_token", refresh_token);
-            ObjectMapper objectMapper = new ObjectMapper();
-            String json = null;
-            try {
-                json = objectMapper.writeValueAsString(tokens);
-                System.out.println(json);
-            } catch (JsonProcessingException e) {
-                e.printStackTrace();
-            }
-            JsonParser parser = new JsonParser();
-            JsonObject object = (JsonObject) parser.parse(json);
-            responseMessage.addProperty("message","Login Successfully");
-            responseMessage.add("responseObject",object);
-            responseMessage.addProperty("responseStatus",HttpStatus.OK.value());
+            // Final Tokens
+            String accessToken = jwtBuilder.sign(algorithm);
 
-            // responseMessage.setData(bcryptEncoder.encrypt(users.getPermissions()));
-        } catch (BadCredentialsException be) {
-            be.printStackTrace();
-            System.out.println("Exception " + be.getMessage());
-            responseMessage.addProperty("message","Incorrect Username or Password");
-            responseMessage.addProperty("responseStatus",HttpStatus.UNAUTHORIZED.value());
-        } catch (Exception e) {
-            e.printStackTrace();
-            System.out.println("Exception " + e.getMessage());
-            responseMessage.addProperty("message","Incorrect Username or Password");
-            responseMessage.addProperty("responseStatus",HttpStatus.UNAUTHORIZED.value());
+            String refreshToken = JWT.create()
+                    .withSubject(user.getUsername())
+                    .withIssuer(req.getRequestURI())
+                    .withExpiresAt(new Date(System.currentTimeMillis() + TOKEN_VALIDITY * 1000))
+                    .sign(algorithm);
+
+            JsonObject tokens = new JsonObject();
+            tokens.addProperty("access_token", accessToken);
+            tokens.addProperty("refresh_token", refreshToken);
+            responseMessage.add("responseObject", tokens);
+            responseMessage.addProperty("message", "Login Successfully");
+            responseMessage.addProperty("responseStatus", HttpStatus.OK.value());
+
+            return ResponseEntity.ok(responseMessage.toString());
+
+        } catch (BadCredentialsException ex) {
+            responseMessage.addProperty("message", "Incorrect Username or Password");
+            responseMessage.addProperty("responseStatus", HttpStatus.UNAUTHORIZED.value());
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(responseMessage.toString());
+        } catch (Exception ex) {
+            ex.printStackTrace();
+            responseMessage.addProperty("message", "Authentication failed");
+            responseMessage.addProperty("responseStatus", HttpStatus.INTERNAL_SERVER_ERROR.value());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(responseMessage.toString());
         }
-        //   responseMessage.setData(jwtToken);
-        return responseMessage.toString();
     }
 
-//    @RequestMapping(value = "/authenticate", method = RequestMethod.POST)
-//    public ResponseEntity<?> createAuthenticateToken(@RequestBody Map<String, String> request,
-//                                                     HttpServletRequest req) throws Exception {
-//        ResponseMessage responseMessage = new ResponseMessage();
-//        String username = request.get("username");
-//        String password = request.get("password");
-//
-//        try {
-//            Users userDetails = userService.findUserByUsername(username, password);
-//            System.out.println("userDetails : "+userDetails);
-//            if (userDetails != null) {
-//                Object jwtToken = jwtUtil.generateToken(req, userDetails.getUsername());
-//
-//                responseMessage.setMessage("Login success");
-//                responseMessage.setResponse(jwtToken);
-//
-//                responseMessage.setResponseStatus(HttpStatus.OK.value());
-//                System.out.println("login success");
-//                return ResponseEntity.ok(responseMessage);
-//            } else {
-//                System.out.println("login fail");
-//                responseMessage.setMessage("Incorrect username or password");
-//                responseMessage.setResponseStatus(HttpStatus.NOT_FOUND.value());
-//                return ResponseEntity.ok(responseMessage);
-//            }
-//        } catch (Exception e1) {
-//            System.out.println(e1.getMessage());
-//            System.out.println("login fail");
-//            responseMessage.setMessage("User not found");
-//            responseMessage.setResponseStatus(HttpStatus.NOT_FOUND.value());
-//            return ResponseEntity.ok(responseMessage);
-//        }
-//    }
 
 
-//    @PostMapping("/change-password")
-//    public Object changePassword(@RequestBody Map<String, String> request, HttpServletRequest req) {
-//        return userService.changePassword(request, req);
-//    }
 
     @GetMapping("/token/refresh")
     public void refreshToken(HttpServletRequest request, HttpServletResponse response)
